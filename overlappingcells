@@ -1,0 +1,184 @@
+from cellpose import models, io
+import csv
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import os
+import csv
+import numpy as np
+import pandas as pd
+import copy
+
+from os import path
+imagename = 'C:/Users/thang/Desktop/0048_24200_50800_005_27154_827_432.jpg'
+img = io.imread(imagename)
+model = models.Cellpose(gpu=False, model_type='cyto')
+masks, flows, styles, diams = model.eval(img, diameter=None,channels=[0,0],do_3D=False)
+labeled_array, num_features = ndimage.label(masks != 0, np.ones((3,3)))
+
+np.save("%s.npy" % os.path.basename(imagename),masks)
+np.savetxt("orig.csv",masks,delimiter=",")
+def FindNumbers(data):
+    numbers=[]
+    rows=len(data)
+    columns=len(data[0])
+    for i in range(rows):
+        for j in range(columns):
+            if data[i][j]!=0:
+                if data[i][j] not in numbers:
+                    numbers.append(data[i][j])
+    return numbers
+def runThrough(data,number):
+    #this function finds all of the possible pairing within the Island
+    def find_pairs(number,array):
+        num=0
+        matchingnumber=number[1]
+        for i in range(len(array)-1):
+            for j in range (len(array[0])-1):
+                if array[i][j]== number[0]:
+                            if array[i+1][j]==matchingnumber or  array[i][j+1]==matchingnumber or  array[i-1][j]==matchingnumber or  array[i][j-1]==matchingnumber:
+                                num=num+1                   
+        return num
+    #given a array of number (mostly an array of 2 numbers), this function will find the perimeter using those numbers (excluding 0)
+    def perimeter(number,array):
+        num=0
+        if number[1]==0:
+            for i in range(len(array)-1):              
+                for j in range (len(array[0])-1):
+                    if array[i][j]== number[0]:
+                        if array[i+1][j]!=number[0] or  array[i][j+1]!=number[0] or  array[i-1][j]!=number[0] or  array[i][j-1]!=number[0]:
+                            num=num+1
+        elif number[1]!=0:
+            for z in range(len(number)):
+                for i in range(len(array)-1):              
+                    for j in range (len(array[0])-1):
+                        if array[i][j]== number[z]:
+                            if array[i+1][j] not in number or  array[i][j+1] not in number or  array[i-1][j] not in number or  array[i][j-1]not in number:
+                                num=num+1
+        return num
+    #given a array of number (mostly an array of 2 numbers), this function will find the area using those numbers (excluding 0)
+    def area(number,array):
+        num=0
+        for z in range(len(number)):
+            if number[z]!=0:
+                for i in range(len(array)):              
+                    for j in range (len(array[0])):
+                        if array[i][j]== number[z]:
+                            num=num+1
+        return num
+    #this functions goes along all of the area and remove the numbers that has a low amount of area (this is to instantly remove the outlier numbers)
+    def findMax(totalarray):
+        allarea=totalarray["area"]
+        sorted(allarea)
+        q1,q3=np.percentile(allarea,[25,75])
+        iqr = q3 - q1
+        lower_bound = q1 -(1.5 * iqr)
+        df3 = totalarray[totalarray['area'] > lower_bound]   
+        
+        return df3     
+        
+    #this funciton removes the set of numbers (and their attributes) from dataframe 
+    def Filtered(dataframe, number):
+        filtered_dataframe=  dataframe.loc[(dataframe['1st value'] == number)|(dataframe['2nd value'] == number)]
+        dataframe_datalist= dataframe[(dataframe['1st value'] != number)&(dataframe['2nd value'] != number)]
+        if len(dataframe)==0:
+            return dataframe_datalist,[0,0]
+        if len(filtered_dataframe.index)>1:
+            x= filtered_dataframe[filtered_dataframe.smoothness == filtered_dataframe.smoothness.max()]
+            
+            array=x[x.columns[0:2]]
+            return dataframe_datalist, array
+        elif len(filtered_dataframe.index)==1:
+            array=filtered_dataframe[filtered_dataframe.columns[0:2]]
+            return dataframe_datalist,array
+    #this function finds all of the number within data
+    def FindNumbers(data):
+        numbers=[]
+        rows=len(data)
+        columns=len(data[0])
+        for i in range(rows):
+            for j in range(columns):
+                if data[i][j]!=0:
+                    if data[i][j] not in numbers:
+                        numbers.append(data[i][j])
+        return numbers
+        
+                
+
+    #finds the amount of row and column within data
+    rows=len(data)
+    columns=len(data[0])
+    #turn everything in data into a float
+    for i in range(rows):
+        for j in range(columns):
+             data[i][j]=float(data[i][j])
+    #finds all of the number in the data
+    numbers=FindNumbers(data)
+ 
+    #Find all of the possible pairing given all of the numbers in the data
+    pairsnumber = [(a, b) for idx, a in enumerate(numbers) for b in numbers[idx + 1:]] 
+    updatedpairsnumber=[]
+
+    #Find the pairing that touches each other more than 10 times (this nunmber can be changed) and make sure to add the all the numbers with 0 as a pairing (indicating the data of this number alone)
+    for i in range(len(pairsnumber)):
+        amount=(find_pairs(pairsnumber[i],data))
+        if amount>10:
+            updatedpairsnumber.append(pairsnumber[i])
+    for i in numbers:
+        updatedpairsnumber.append([i,0])
+
+    #Given all of the pairing, find the area, the perimter, and the smoothness of those pairing
+    pairs_perimeter_area=[]
+    for i in range(len(updatedpairsnumber)):
+        pairs_perimeter_area.append([float(updatedpairsnumber[i][0]), float(updatedpairsnumber[i][1]), float(perimeter(updatedpairsnumber[i],data)),float(area(updatedpairsnumber[i],data)), float(area(updatedpairsnumber[i],data)/(perimeter(updatedpairsnumber[i],data)**2))])
+    dataframe_datalist=pd.DataFrame(pairs_perimeter_area,
+                       columns=['1st value', '2nd value', 'perimeter','area','smoothness'])
+    #remove the pairing with an outlier of a area
+    #dataframe_datalist=findMax(dataframe_datalist)
+    outcome=[]
+
+    #############add a system that removes flip flop pairing###############
+
+    #Go through to get all of the pairing that has the highest smoothness
+    for i in numbers:
+        temp=Filtered(dataframe_datalist,i)
+ 
+        outcome.append(temp[1])
+
+        dataframe_datalist=temp[0]
+    x=np.zeros((len(data),len(data[0])))
+    #go through all of the correct pairing
+    for z in range(len(outcome)):
+        if isinstance(outcome[z], list)==False:
+            tempdata=np.copy(data)
+            if (outcome[z]['1st value'].values[0]!=0):
+                if(outcome[z]['2nd value'].values[0]!=0):
+                    
+                    #if the pairing doesn't have a 0, we insantly remove one of the number in the pair with the other number
+                    for i in range(rows):
+                        for j in range(columns):
+                            if tempdata[i][j]== outcome[z]['1st value'].values[0]:
+                                tempdata[i][j]=outcome[z]['2nd value'].values[0]
+                            elif tempdata[i][j]!= outcome[z]['1st value'].values[0] and tempdata[i][j]!= outcome[z]['2nd value'].values[0]:
+                                tempdata[i][j]=0
+                    #if the pairing does have a 0, we do nothing
+                elif (outcome[z]['2nd value'].values[0]==0):
+                    if tempdata[i][j]!= outcome[z]['1st value'].values[0]:
+                        tempdata[i][j]=0
+                #stack temp data
+            
+            
+            DF = pd.DataFrame(tempdata)
+            
+
+            x=np.dstack((x,tempdata))
+    return x
+finalarray=np.zeros((len(masks),len(masks[0])))
+
+for i in range(1,num_features+1):
+    temparray=np.zeros((len(masks),len(masks[0])))
+    island = masks.copy()
+    island[labeled_array != i] = 0
+    # ^ This is your island -- note that the islands are out of order, though they can be renumbered if it's necessary for your function
+    temparray=runThrough((island),i)
+    finalarray=np.dstack((finalarray,temparray))
